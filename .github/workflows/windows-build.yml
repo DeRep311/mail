@@ -1,0 +1,67 @@
+name: Windows build (fork)
+
+# Builds an unsigned portable Windows x64 package of this fork's code.
+# Mirrors the build and packaging steps of the upstream "Windows packages"
+# job in native-platforms.yml, without signing, store or release steps.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/windows-build
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows-x64:
+    name: Windows x64 portable package
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-on-failure: true
+          key: fork-windows-x64
+
+      - name: Build release executable
+        shell: bash
+        env:
+          # Same flags as upstream: portable CRT and the stack size from .cargo/config.toml.
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/STACK:8000000"
+        run: cargo build --locked --release --no-default-features --features remote-content,gpu-renderer --bin flectar-mail
+
+      - name: Package executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/package/windows | Out-Null
+          New-Item -ItemType Directory -Force "target/package/windows/LICENSES/Google Sans Flex" | Out-Null
+          New-Item -ItemType Directory -Force "target/package/windows/LICENSES/Noto Emoji" | Out-Null
+          python scripts/stage-pdfium.py "win-x64" target/package/windows
+          if ($LASTEXITCODE -ne 0) { throw "PDFium staging failed" }
+          Copy-Item target/release/flectar-mail.exe target/package/windows/
+          Copy-Item README.md target/package/windows/
+          Copy-Item LICENSE target/package/windows/
+          Copy-Item LICENSES/* target/package/windows/LICENSES/ -Recurse -Force
+          Copy-Item THIRD_PARTY_NOTICES.md target/package/windows/
+          Copy-Item resources/fonts/google-sans-flex/OFL.txt "target/package/windows/LICENSES/Google Sans Flex/"
+          Copy-Item resources/fonts/google-sans-flex/README.md "target/package/windows/LICENSES/Google Sans Flex/"
+          Copy-Item resources/fonts/noto-emoji/OFL.txt "target/package/windows/LICENSES/Noto Emoji/"
+          Copy-Item resources/fonts/noto-emoji/README.md "target/package/windows/LICENSES/Noto Emoji/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flectar-mail-windows-x64-${{ github.sha }}
+          path: target/package/windows/
+          retention-days: 30
